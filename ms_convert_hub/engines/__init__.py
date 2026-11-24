@@ -152,7 +152,9 @@ class MsConvert(Engine):
         return m.group(1) if m else ""
 
     def _cmd(self, src, work, s, picking):
-        src = os.path.abspath(src)
+        # the real path: a symbolic link (workflow managers stage inputs as links) points outside the folder
+        # mounted into the container. A Sciex .wiff finds its .wiff.scan next to the real file.
+        src = os.path.realpath(src)
         folder, base = os.path.split(os.path.normpath(src))
         filters = ["--filter", picking, "--filter", self.MS_ONLY]
         if self._docker(s):

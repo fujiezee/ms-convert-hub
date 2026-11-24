@@ -90,6 +90,7 @@ def fake_msconvert(folder, samples=1, fail_vendor=False):
             if {fail_vendor!r} and "peakPicking vendor msLevel=1-" in a:
                 print("Fatal error. 0xC0000005 at centroidScan"); sys.exit(5)
             src, out = a[0], a[a.index("-o") + 1]
+            open(os.path.join(out, "input.txt"), "w").write(src)
             stem = os.path.basename(os.path.normpath(src)).rsplit(".", 1)[0]
             names = [stem + ".mzML"] if {samples} == 1 else [f"{{stem}}-{{i + 1}}.mzML" for i in range({samples})]
             for n in names:

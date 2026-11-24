@@ -56,6 +56,17 @@ class Convert(unittest.TestCase):
         self.assertIn("peakPicking cwt msLevel=1-", r["command"])
         self.assertIn("msLevel 1-", r["command"], "mass spectra only")
 
+    def test_linked_input_is_read_from_its_real_path(self):
+        real = make(self.dir, "real.raw", "waters")
+        staged = os.path.join(self.dir, "staged")
+        os.makedirs(staged)
+        link = os.path.join(staged, "S05.raw")
+        os.symlink(real, link)
+        r = convert_one(link, self.out, Settings(msconvert=fake_msconvert(self.dir)))
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["command"][1], os.path.realpath(real))
+        self.assertEqual(os.path.basename(r["output"]), "S05.mzML", "named after the input as given")
+
     def test_several_samples_in_one_file(self):
         wiff = make(self.dir, "batch.wiff", "wiff")
         r = convert_one(wiff, self.out, Settings(msconvert=fake_msconvert(self.dir, samples=3)))
