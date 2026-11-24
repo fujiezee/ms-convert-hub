@@ -29,11 +29,22 @@ class Check(unittest.TestCase):
 
     def test_problems(self):
         self.assertEqual(problems(summarize(write(mzml([]))))[0], ["no spectra"])
-        self.assertIn("no MS1 spectra", problems(summarize(write(mzml([spectrum(0, level=2)]))))[0])
+        self.assertRegex(problems(summarize(write(mzml([spectrum(0, level=2)]))))[0][0], "^no MS1 spectra")
         _, w = problems(summarize(write(mzml([spectrum(0, centroid=False), spectrum(1, polarity=None), spectrum(2, rt=0)]))))
         self.assertTrue(any("profile" in x for x in w) and any("without polarity" in x for x in w) and any("decreases" in x for x in w))
         _, w = problems(summarize(write(mzml([spectrum(0)], model="MS:1003378"))))
         self.assertTrue(any("MS:1003378" in x for x in w))
+
+    def test_srm_and_uv(self):
+        # SRM/MRM: chromatograms only
+        errors, _ = problems(summarize(write(mzml([], chromatograms=8))))
+        self.assertEqual(errors, ["no spectra and 8 chromatograms: SRM/MRM data, not for untargeted analysis"])
+        errors, _ = problems(summarize(write(mzml([spectrum(0, level=2), spectrum(1, level=2)], chromatograms=1))))
+        self.assertRegex(errors[0], "only MS2: targeted MS/MS data")
+        # UV/DAD spectra next to the mass spectra: counted apart, not as profile or polarity-less mass spectra
+        s = summarize(write(mzml([spectrum(0), spectrum(1, level=0, polarity=None, centroid=False), spectrum(2)])))
+        self.assertEqual((s["ms_levels"], s["polarity"]["none"], s["profile"]), ({"0": 1, "1": 2}, 0, 0))
+        self.assertEqual(problems(s)[1], ["1 spectra without MS level (UV/DAD or other detectors)"])
 
     def test_patch_keeps_length_and_is_idempotent(self):
         path = write(mzml([spectrum(0)], model="MS:1003378"))
