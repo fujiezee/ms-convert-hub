@@ -94,7 +94,7 @@ class Thermo(Engine):
         return _run([_which(s.thermo_parser), "--version"], s, timeout=60).strip().splitlines()[-1].strip()
 
     def convert(self, src, work, s):
-        # -f 1: mzML; vendor centroiding is on by default (as job 034 of BioWorker converts)
+        # -f 1: mzML (not indexed); vendor centroiding is on by default
         cmd = [_which(s.thermo_parser), "-i", src, "-o", work, "-f", "1"]
         _run(cmd, s)
         return _single_mzml(work), cmd
