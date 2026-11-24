@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import signal
 import sys
 from concurrent.futures import ThreadPoolExecutor
 
@@ -10,7 +12,7 @@ from . import __version__
 from .check import problems, summarize
 from .convert import convert_one
 from .detect import FORMATS, UnknownFormat, detect
-from .engines import ENGINES, MSCONVERT_IMAGE, Settings
+from .engines import ENGINES, MSCONVERT_IMAGE, Settings, kill_containers
 
 
 def _settings(a) -> Settings:
@@ -117,6 +119,13 @@ def main(argv=None) -> int:
     e.set_defaults(func=cmd_engines)
 
     a = p.parse_args(argv)
+    # told to stop (a workflow manager cancelling the task, Ctrl-C): the converters' containers go too
+    def stop(signum, _frame):
+        kill_containers()
+        os._exit(128 + signum)
+    if a.command == "convert":
+        for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+            signal.signal(sig, stop)
     return a.func(a)
 
 
