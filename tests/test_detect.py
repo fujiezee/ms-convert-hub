@@ -21,7 +21,7 @@ class Detect(unittest.TestCase):
 
     def test_engines_best_first(self):
         self.assertEqual(detect(make(self.dir, "a.raw", "thermo")).engines, ("thermo", "msconvert"))
-        self.assertEqual(detect(make(self.dir, "c.d", "tdf")).engines, ("timsconvert", "msconvert"))
+        self.assertEqual(detect(make(self.dir, "c.d", "tdf")).engines, ("msconvert", "timsconvert"))
         self.assertEqual(detect(make(self.dir, "g.raw", "waters")).engines, ("msconvert",))
 
     def test_refused_with_the_reason(self):
@@ -32,10 +32,12 @@ class Detect(unittest.TestCase):
                 path = make(self.dir, name, kind) if kind else os.path.join(self.dir, name)
                 with self.assertRaisesRegex(UnknownFormat, reason):
                     detect(path)
+        # older Analyst .wiff files hold the spectra themselves (no .wiff.scan)
         w = make(self.dir, "lone.wiff", "wiff")
         os.remove(w + ".scan")
-        with self.assertRaisesRegex(UnknownFormat, r"lone\.wiff\.scan is missing"):
-            detect(w)
+        self.assertEqual(detect(w).kind, "sciex-wiff")
+        with self.assertRaisesRegex(UnknownFormat, "not a Sciex"):
+            detect(make(self.dir, "fake.wiff", "text"))
 
 
 if __name__ == "__main__":

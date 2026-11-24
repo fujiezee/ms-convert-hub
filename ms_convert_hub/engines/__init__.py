@@ -47,11 +47,12 @@ def _run(cmd: list[str], settings: Settings, timeout: int | None = None) -> str:
     return r.stdout
 
 
-def _single_mzml(folder: str) -> str:
-    found = glob.glob(os.path.join(folder, "**", "*.mzML"), recursive=True)
-    if len(found) != 1:
-        raise EngineError(f"expected one mzML from the engine, found {len(found)}")
-    return found[0]
+def _mzmls(folder: str) -> list[str]:
+    """The engine's outputs: one mzML, or one per sample of a file holding several (Sciex .wiff)."""
+    found = sorted(glob.glob(os.path.join(folder, "**", "*.mzML"), recursive=True))
+    if not found:
+        raise EngineError("the engine wrote no mzML")
+    return found
 
 
 class Engine:
@@ -65,8 +66,9 @@ class Engine:
     def version(self, s: Settings) -> str:
         return ""
 
-    def convert(self, src: str, work: str, s: Settings) -> tuple[str, list[str]]:
-        """Converts `src` into the folder `work`; returns the mzML path and the command."""
+    def convert(self, src: str, work: str, s: Settings) -> tuple[list[str], list[str], dict]:
+        """Converts `src` into the folder `work`; returns the mzML paths (one per sample), the command and
+        notes for the record (e.g. the peak picking used)."""
         raise NotImplementedError
 
 
@@ -80,7 +82,7 @@ class Copy(Engine):
     def convert(self, src, work, s):
         out = os.path.join(work, "copy.mzML")
         shutil.copyfile(src, out)
-        return out, ["copy", src]
+        return [out], ["copy", src], {}
 
 
 class Thermo(Engine):
@@ -97,7 +99,7 @@ class Thermo(Engine):
         # -f 1: mzML (not indexed); vendor centroiding is on by default
         cmd = [_which(s.thermo_parser), "-i", src, "-o", work, "-f", "1"]
         _run(cmd, s)
-        return _single_mzml(work), cmd
+        return _mzmls(work), cmd, {"peak_picking": "vendor"}
 
 
 class TimsConvert(Engine):
@@ -118,13 +120,16 @@ class TimsConvert(Engine):
         # centroided MS1/MS2 without the ion mobility arrays: what LC-MS feature detection reads
         cmd = [_which(s.timsconvert), "--input", src, "--outdir", work, "--mode", "centroid", "--exclude_mobility"]
         _run(cmd, s)
-        return _single_mzml(work), cmd
+        return _mzmls(work), cmd, {"peak_picking": "TDF-SDK centroid"}
 
 
 class MsConvert(Engine):
     name = "msconvert"
     description = "ProteoWizard msconvert with the vendor readers (Windows, or its Wine image under Docker on Linux)"
-    FILTER = "peakPicking vendor msLevel=1-"
+    # vendor centroiding; when it fails (Waters' native centroider crashes under Wine on some files) ProteoWizard's
+    # own CWT peak picking. msLevel 1-: only mass spectra (UV/DAD spectra in the same file have no MS level)
+    PEAK_PICKING = [("vendor", "peakPicking vendor msLevel=1-"), ("cwt", "peakPicking cwt msLevel=1-")]
+    MS_ONLY = "msLevel 1-"
 
     def _docker(self, s):
         return s.msconvert == "docker"
@@ -146,17 +151,31 @@ class MsConvert(Engine):
         m = re.search(r"ProteoWizard release:\s*(\S+)", text)
         return m.group(1) if m else ""
 
-    def convert(self, src, work, s):
+    def _cmd(self, src, work, s, picking):
         src = os.path.abspath(src)
         folder, base = os.path.split(os.path.normpath(src))
+        filters = ["--filter", picking, "--filter", self.MS_ONLY]
         if self._docker(s):
             # the input's folder read-only (a .wiff needs its .wiff.scan next to it), the work folder for the output
-            cmd = ["docker", "run", "--rm", "-e", "WINEDEBUG=-all", "-v", f"{folder}:/in:ro", "-v", f"{os.path.abspath(work)}:/out",
-                   s.docker_image, "wine", "msconvert", f"/in/{base}", "-o", "/out", "--mzML", "--filter", self.FILTER]
-        else:
-            cmd = [_which(s.msconvert), src, "-o", work, "--mzML", "--filter", self.FILTER]
-        _run(cmd, s)
-        return _single_mzml(work), cmd
+            return ["docker", "run", "--rm", "-e", "WINEDEBUG=-all", "-v", f"{folder}:/in:ro", "-v", f"{os.path.abspath(work)}:/out",
+                    s.docker_image, "wine", "msconvert", f"/in/{base}", "-o", "/out", "--mzML", *filters]
+        return [_which(s.msconvert), src, "-o", work, "--mzML", *filters]
+
+    def convert(self, src, work, s):
+        failures = []
+        for name, picking in self.PEAK_PICKING:
+            for f in glob.glob(os.path.join(work, "*.mzML")):
+                os.remove(f)
+            cmd = self._cmd(src, work, s, picking)
+            try:
+                _run(cmd, s)
+                notes = {"peak_picking": name}
+                if failures:
+                    notes["retried"] = failures
+                return _mzmls(work), cmd, notes
+            except EngineError as e:
+                failures.append(f"{name} peak picking: {str(e).splitlines()[0][:200]}")
+        raise EngineError("msconvert failed: " + "; ".join(failures))
 
 
 ENGINES = {e.name: e for e in (Copy(), Thermo(), TimsConvert(), MsConvert())}

@@ -16,16 +16,20 @@ def spectrum(i, level=1, polarity="positive", rt=None, centroid=True, unit="minu
     mode = ('<cvParam cvRef="MS" accession="MS:1000127" name="centroid spectrum" value=""/>' if centroid
             else '<cvParam cvRef="MS" accession="MS:1000128" name="profile spectrum" value=""/>')
     rt = i * 0.5 if rt is None else rt
+    # level 0: a UV/DAD spectrum (no MS level, no polarity)
+    lvl = f'<cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="{level}"/>' if level else ""
     return (f'<spectrum index="{i}" id="scan={i + 1}" defaultArrayLength="0">'
-            f'<cvParam cvRef="MS" accession="MS:1000511" name="ms level" value="{level}"/>{pol}{mode}'
+            f'{lvl}{pol}{mode}'
             f'<scanList count="1"><scan><cvParam cvRef="MS" accession="MS:1000016" name="scan start time" value="{rt}" unitName="{unit}"/></scan></scanList>'
             f'</spectrum>')
 
 
-def mzml(spectra, model="MS:1000483"):
+def mzml(spectra, model="MS:1000483", chromatograms=0):
+    chrom = "".join(f'<chromatogram index="{i}" id="SRM {i}" defaultArrayLength="0"/>' for i in range(chromatograms))
     return ('<?xml version="1.0" encoding="utf-8"?>\n<indexedmzML xmlns="http://psi.hupo.org/ms/mzml"><mzML>'
             f'<instrumentConfigurationList count="1"><instrumentConfiguration id="IC1"><cvParam cvRef="MS" accession="{model}" name="model" value=""/></instrumentConfiguration></instrumentConfigurationList>'
-            f'<run id="r"><spectrumList count="{len(spectra)}">{"".join(spectra)}</spectrumList></run></mzML></indexedmzML>\n')
+            f'<run id="r"><spectrumList count="{len(spectra)}">{"".join(spectra)}</spectrumList>'
+            f'<chromatogramList count="{chromatograms}">{chrom}</chromatogramList></run></mzML></indexedmzML>\n')
 
 
 def fake_parser(folder, fail=False, model="MS:1003378"):
@@ -69,3 +73,27 @@ def make(root, name, kind):
     else:
         open(p, "wb").write(b"plain text")
     return p
+
+
+def fake_msconvert(folder, samples=1, fail_vendor=False):
+    """An msconvert stand-in: SRC -o DIR --mzML --filter ... writes one mzML per sample (<name>-<n>.mzML when
+    several); with fail_vendor the vendor peak picking fails and cwt works."""
+    doc = mzml([spectrum(0), spectrum(1), spectrum(2, level=2)])
+    path = os.path.join(folder, "FakeMsconvert")
+    with open(path, "w") as fh:
+        fh.write(textwrap.dedent(f"""\
+            #!{sys.executable}
+            import os, sys
+            a = sys.argv[1:]
+            if "--help" in a:
+                print("ProteoWizard release: 9.0.1"); sys.exit(0)
+            if {fail_vendor!r} and "peakPicking vendor msLevel=1-" in a:
+                print("Fatal error. 0xC0000005 at centroidScan"); sys.exit(5)
+            src, out = a[0], a[a.index("-o") + 1]
+            stem = os.path.basename(os.path.normpath(src)).rsplit(".", 1)[0]
+            names = [stem + ".mzML"] if {samples} == 1 else [f"{{stem}}-{{i + 1}}.mzML" for i in range({samples})]
+            for n in names:
+                open(os.path.join(out, n), "w").write({doc!r})
+            """))
+    os.chmod(path, os.stat(path).st_mode | stat.S_IEXEC)
+    return path
