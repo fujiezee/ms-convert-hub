@@ -34,7 +34,13 @@ was made.
 the engines are tried in order until one succeeds (the record lists the ones that failed). msconvert uses the
 vendor's centroiding and, when that fails (Waters' native centroider crashes under Wine on some files),
 ProteoWizard's CWT peak picking; it keeps mass spectra only (UV/DAD spectra in the same file are dropped).
-A Sciex `.wiff` holding several samples gives one mzML per sample, each checked.
+A Sciex `.wiff` holding several samples gives one mzML per sample, each checked. For timsTOF data with ion mobility
+(TDF), msconvert combines the mobility scans of each frame into one spectrum (`--combineIonMobilitySpectra`):
+one spectrum per mobility scan made a 15 min run of 400 MB into more than 10 GB of mzML; combined it takes
+45 s and 0.7 GB, and XCMS finds peaks as in other LC-MS data.
+
+When a conversion is stopped (Ctrl-C, or a workflow manager cancelling the task), the Docker containers it
+started are killed with it; stopping the docker client alone leaves them running.
 
 The engines are not bundled. Each reader comes under its own licence, and the vendor libraries under the
 vendors' terms (the Docker image's name says you accept them); read them before using an engine.
@@ -82,6 +88,9 @@ yourself (`codesign --force --sign - ThermoRawFileParser`) or use the conda pack
   in Docker: every full-scan file converted; where ProteoWizard ships the reference conversion of the whole
   file (16 files), the spectra per MS level and polarity are the same; the 7 SRM/MRM and MS2-only files are
   refused with that reason; a Sciex .wiff holding several samples gives one mzML per sample.
+- Real data from public repositories through an untargeted pipeline (XCMS): Bruker timsTOF PASEF (TDF, MetaboBank
+  MTBKS220), negative mode, 15 min runs: 1011 MS1 spectra, polarity recorded, 935 chromatographic peaks with
+  default centWave settings.
 
 ## Tests
 
