@@ -7,6 +7,8 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import uuid
 from dataclasses import dataclass, field
 
 MSCONVERT_IMAGE = "proteowizard/pwiz-skyline-i-agree-to-the-vendor-licenses"
@@ -31,8 +33,28 @@ def _which(cmd: str) -> str | None:
     return cmd if os.path.isfile(cmd) and os.access(cmd, os.X_OK) else shutil.which(cmd)
 
 
-def _run(cmd: list[str], settings: Settings, timeout: int | None = None) -> str:
+# containers started by this process: stopping the docker client does not stop its container, so they are
+# killed when a run fails or the process is told to stop (kill_containers, called by the command line)
+_CONTAINERS: set[str] = set()
+_LOCK = threading.Lock()
+
+
+def container_name() -> str:
+    return f"ms-convert-hub-{os.getpid()}-{uuid.uuid4().hex[:8]}"
+
+
+def kill_containers() -> None:
+    with _LOCK:
+        names = list(_CONTAINERS)
+    for name in names:
+        subprocess.run(["docker", "kill", name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+
+def _run(cmd: list[str], settings: Settings, timeout: int | None = None, container: str | None = None) -> str:
     settings.log.append("$ " + " ".join(cmd))
+    if container:
+        with _LOCK:
+            _CONTAINERS.add(container)
     try:
         r = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=timeout,
                            env={**os.environ, "LC_ALL": os.environ.get("LC_ALL", "C.UTF-8")})
@@ -40,6 +62,12 @@ def _run(cmd: list[str], settings: Settings, timeout: int | None = None) -> str:
         raise EngineError(f"{cmd[0]}: not found") from e
     except subprocess.TimeoutExpired as e:
         raise EngineError(f"{cmd[0]}: no answer within {timeout} s") from e
+    finally:
+        if container:
+            # gone already when it ended normally (--rm); killed when the run was cut short
+            subprocess.run(["docker", "kill", container], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            with _LOCK:
+                _CONTAINERS.discard(container)
     settings.log.append(r.stdout[-4000:])
     if r.returncode:
         tail = "\n".join(r.stdout.strip().splitlines()[-5:])
@@ -151,15 +179,24 @@ class MsConvert(Engine):
         m = re.search(r"ProteoWizard release:\s*(\S+)", text)
         return m.group(1) if m else ""
 
-    def _cmd(self, src, work, s, picking):
+    @staticmethod
+    def _tims(src) -> bool:
+        """A timsTOF .d with ion mobility (TDF)."""
+        return os.path.isfile(os.path.join(src, "analysis.tdf"))
+
+    def _cmd(self, src, work, s, picking, name=None):
         # the real path: a symbolic link (workflow managers stage inputs as links) points outside the folder
         # mounted into the container. A Sciex .wiff finds its .wiff.scan next to the real file.
         src = os.path.realpath(src)
         folder, base = os.path.split(os.path.normpath(src))
         filters = ["--filter", picking, "--filter", self.MS_ONLY]
+        # timsTOF: one spectrum per frame instead of one per mobility scan (otherwise a 15 min run of 400 MB gives
+        # over 10 GB of mzML in more than 10 minutes; combined: 0.7 GB in 45 s, peaks found as in LC-MS)
+        if self._tims(src):
+            filters = ["--combineIonMobilitySpectra", *filters]
         if self._docker(s):
             # the input's folder read-only (a .wiff needs its .wiff.scan next to it), the work folder for the output
-            return ["docker", "run", "--rm", "-e", "WINEDEBUG=-all", "-v", f"{folder}:/in:ro", "-v", f"{os.path.abspath(work)}:/out",
+            return ["docker", "run", "--rm", "--name", name, "-e", "WINEDEBUG=-all", "-v", f"{folder}:/in:ro", "-v", f"{os.path.abspath(work)}:/out",
                     s.docker_image, "wine", "msconvert", f"/in/{base}", "-o", "/out", "--mzML", *filters]
         return [_which(s.msconvert), src, "-o", work, "--mzML", *filters]
 
@@ -168,10 +205,13 @@ class MsConvert(Engine):
         for name, picking in self.PEAK_PICKING:
             for f in glob.glob(os.path.join(work, "*.mzML")):
                 os.remove(f)
-            cmd = self._cmd(src, work, s, picking)
+            container = container_name() if self._docker(s) else None
+            cmd = self._cmd(src, work, s, picking, container)
             try:
-                _run(cmd, s)
+                _run(cmd, s, container=container)
                 notes = {"peak_picking": name}
+                if self._tims(os.path.realpath(src)):
+                    notes["ion_mobility"] = "combined per frame"
                 if failures:
                     notes["retried"] = failures
                 return _mzmls(work), cmd, notes

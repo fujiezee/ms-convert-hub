@@ -1,4 +1,10 @@
 import io
+import signal
+import stat
+import subprocess
+import sys
+import textwrap
+import time
 import json
 import os
 import tempfile
@@ -75,6 +81,53 @@ class Convert(unittest.TestCase):
         self.assertEqual(len(r["samples"]), 3)
         self.assertTrue(all(x["check"]["spectra"] == 3 for x in r["samples"]))
         self.assertTrue(convert_one(wiff, self.out, Settings(msconvert="/nonexistent"), skip_existing=True).get("skipped"))
+
+    def test_timstof_combines_ion_mobility(self):
+        tdf = make(self.dir, "U1.d", "tdf")
+        r = convert_one(tdf, self.out, Settings(msconvert=fake_msconvert(self.dir)), engine="msconvert")
+        self.assertTrue(r["ok"], r)
+        self.assertIn("--combineIonMobilitySpectra", r["command"])
+        self.assertEqual(r["ion_mobility"], "combined per frame")
+        baf = convert_one(make(self.dir, "B1.d", "baf"), self.out, Settings(msconvert=fake_msconvert(self.dir)), engine="msconvert")
+        self.assertNotIn("--combineIonMobilitySpectra", baf["command"])
+        self.assertNotIn("ion_mobility", baf)
+
+    def test_stopping_kills_the_container(self):
+        # a stand-in docker: "run" records the container name and waits; "kill" records the name
+        bindir = os.path.join(self.dir, "bin")
+        os.makedirs(bindir)
+        calls = os.path.join(self.dir, "calls.txt")
+        docker = os.path.join(bindir, "docker")
+        with open(docker, "w") as fh:
+            fh.write(textwrap.dedent(f"""\
+                #!{sys.executable}
+                import sys, time
+                a = sys.argv[1:]
+                open({calls!r}, "a").write(" ".join(a[:3]) + "\\n")
+                if a[0] == "run" and "--help" not in a:
+                    time.sleep(60)
+                if "--help" in a:
+                    print("ProteoWizard release: 9.0.1")
+                """))
+        os.chmod(docker, os.stat(docker).st_mode | stat.S_IEXEC)
+        w = make(self.dir, "W.raw", "waters")
+        env = {**os.environ, "PATH": bindir + os.pathsep + os.environ["PATH"]}
+        root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+        proc = subprocess.Popen([sys.executable, "-m", "ms_convert_hub", "convert", w, "-o", self.out, "--msconvert", "docker"],
+                                cwd=root, env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        def read():
+            if not os.path.exists(calls):
+                return []
+            with open(calls) as fh:
+                return fh.read().splitlines()
+        for _ in range(100):
+            if any(l.startswith("run --rm --name") for l in read()):
+                break
+            time.sleep(0.1)
+        proc.send_signal(signal.SIGTERM)
+        self.assertEqual(proc.wait(timeout=20), 128 + signal.SIGTERM, "stops at once")
+        killed = [l.split()[1] for l in read() if l.startswith("kill ")]
+        self.assertTrue(killed and killed[0].startswith("ms-convert-hub-"), read())
 
     def test_names(self):
         self.assertEqual([output_name(x) for x in ["a.raw", "b.d/", "c.wiff", "d.wiff2", "e.mzML"]], ["a.mzML", "b.mzML", "c.mzML", "d.mzML", "e.mzML"])
