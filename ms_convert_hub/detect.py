@@ -19,9 +19,11 @@ class Format:
 FORMATS = {
     "mzml": Format("mzml", "mzML", ("copy",)),
     "thermo-raw": Format("thermo-raw", "Thermo .raw", ("thermo", "msconvert")),
-    "bruker-tdf": Format("bruker-tdf", "Bruker timsTOF .d (TDF)", ("timsconvert", "msconvert")),
-    "bruker-tsf": Format("bruker-tsf", "Bruker .d (TSF)", ("timsconvert", "msconvert")),
-    "bruker-baf": Format("bruker-baf", "Bruker .d (BAF)", ("timsconvert", "msconvert")),
+    # msconvert first: it writes each spectrum's polarity, which TIMSCONVERT 2.0.0 leaves out, and it reads
+    # diaPASEF data TIMSCONVERT 2.0.0 fails on (ProteoWizard's test files); TIMSCONVERT where msconvert cannot run
+    "bruker-tdf": Format("bruker-tdf", "Bruker timsTOF .d (TDF)", ("msconvert", "timsconvert")),
+    "bruker-tsf": Format("bruker-tsf", "Bruker .d (TSF)", ("msconvert", "timsconvert")),
+    "bruker-baf": Format("bruker-baf", "Bruker .d (BAF)", ("msconvert", "timsconvert")),
     "agilent-d": Format("agilent-d", "Agilent .d", ("msconvert",)),
     "waters-raw": Format("waters-raw", "Waters .raw", ("msconvert",)),
     "sciex-wiff": Format("sciex-wiff", "Sciex .wiff", ("msconvert",)),
@@ -72,11 +74,10 @@ def detect(path: str) -> Format:
     if name.endswith(".wiff2"):
         return FORMATS["sciex-wiff2"]
     if name.endswith(".wiff"):
-        # OLE2 compound document; the spectra are in <name>.wiff.scan next to it
+        # OLE2 compound document; newer Analyst files keep the spectra in <name>.wiff.scan next to it, older ones
+        # inside the .wiff (the reader says when a .scan it needs is missing)
         if not head.startswith(b"\xd0\xcf\x11\xe0\xa1\xb1\x1a\xe1"):
             raise UnknownFormat(f"{path}: not a Sciex .wiff (no compound-document header)")
-        if not os.path.exists(path + ".scan"):
-            raise UnknownFormat(f"{path}: the spectra file {os.path.basename(path)}.scan is missing next to it")
         return FORMATS["sciex-wiff"]
     if name.endswith(".raw"):
         raise UnknownFormat(f"{path}: a .raw file that is not Thermo (Waters .raw is a folder)")

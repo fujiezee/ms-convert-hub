@@ -17,21 +17,24 @@ was made.
 | Format | Recognised by | Engines, best first |
 |---|---|---|
 | Thermo `.raw` | file header (`Finnigan`) | `thermo` (ThermoRawFileParser), `msconvert` |
-| Bruker timsTOF `.d` (TDF) | `analysis.tdf` in the folder | `timsconvert`, `msconvert` |
-| Bruker `.d` (TSF, BAF) | `analysis.tsf` / `analysis.baf` | `timsconvert`, `msconvert` |
+| Bruker `.d` (TDF, TSF, BAF) | `analysis.tdf` / `.tsf` / `.baf` in the folder | `msconvert`, `timsconvert` |
 | Agilent `.d` | `AcqData` in the folder | `msconvert` |
 | Waters `.raw` (folder) | `_FUNC*.DAT` in the folder | `msconvert` |
-| Sciex `.wiff` / `.wiff2` | compound-document header, `.wiff.scan` next to it | `msconvert` |
+| Sciex `.wiff` / `.wiff2` | compound-document header (`.wiff.scan` next to it when there is one) | `msconvert` |
 | mzXML | XML root | `msconvert` |
 | mzML | XML root | `copy` (fixed and checked) |
 
 | Engine | Reader | Runs on |
 |---|---|---|
 | `thermo` | [ThermoRawFileParser](https://github.com/compomics/ThermoRawFileParser) (Thermo RawFileReader) | macOS, Linux, Windows |
-| `timsconvert` | [TIMSCONVERT](https://github.com/gtluu/timsconvert) (Bruker TDF-SDK) | Linux, Windows |
+| `timsconvert` | [TIMSCONVERT](https://github.com/gtluu/timsconvert) (Bruker TDF-SDK) | Linux, Windows; used for Bruker when msconvert cannot run (TIMSCONVERT 2.0.0 leaves out each spectrum's polarity and fails on diaPASEF data) |
 | `msconvert` | [ProteoWizard](https://proteowizard.sourceforge.io) msconvert with the vendor readers | Windows; Linux with `--msconvert docker` (ProteoWizard's Wine image) |
 
-`ms-convert-hub engines` shows which engines can run here and what is missing. `--engine` forces one.
+`ms-convert-hub engines` shows which engines can run here and what is missing. `--engine` forces one; otherwise
+the engines are tried in order until one succeeds (the record lists the ones that failed). msconvert uses the
+vendor's centroiding and, when that fails (Waters' native centroider crashes under Wine on some files),
+ProteoWizard's CWT peak picking; it keeps mass spectra only (UV/DAD spectra in the same file are dropped).
+A Sciex `.wiff` holding several samples gives one mzML per sample, each checked.
 
 The engines are not bundled. Each reader comes under its own licence, and the vendor libraries under the
 vendors' terms (the Docker image's name says you accept them); read them before using an engine.
@@ -46,7 +49,8 @@ For `<name>.raw`, `<name>.d`, `<name>.wiff`, ... the output folder gets:
 - `<name>.conversion.json`: input, format, engine and its version, the command, the check, warnings or
   errors, the output's SHA-256 and the time taken.
 
-An output is written only when the check finds no errors (no spectra, no MS1). Warnings are listed and fail
+An output is written only when the check finds no errors: no spectra, no MS1 (SRM/MRM data with chromatograms
+only, or MS2-only targeted data, are named as such: they are not for untargeted feature detection). Warnings are listed and fail
 the run with `--strict`: profile spectra, spectra without polarity, both polarities in one file (polarity
 switching: select one downstream), decreasing retention times, unmapped instrument terms.
 
@@ -72,10 +76,12 @@ yourself (`codesign --force --sign - ThermoRawFileParser`) or use the conda pack
 
 ## Checked against
 
-- Thermo (Orbitrap, polarity switching): 3 injections of one order converted byte-identical to the same
-  ThermoRawFileParser run by hand (2.0.0.0, `-f 1`).
-- Bruker, Agilent, Waters, Sciex: detection and engine selection are tested with synthetic folders; the
-  conversions still need checking with real files.
+- Thermo (Orbitrap, polarity switching): 36 injections of one order converted byte-identical to
+  ThermoRawFileParser 2.0.0.0 run by hand (`-f 1`).
+- ProteoWizard's vendor reader test files (Bruker, Agilent, Waters, Sciex; 25 inputs) with msconvert 4.0.26299
+  in Docker: every full-scan file converted; where ProteoWizard ships the reference conversion of the whole
+  file (16 files), the spectra per MS level and polarity are the same; the 7 SRM/MRM and MS2-only files are
+  refused with that reason; a Sciex .wiff holding several samples gives one mzML per sample.
 
 ## Tests
 

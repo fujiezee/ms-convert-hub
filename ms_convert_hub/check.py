@@ -29,6 +29,7 @@ def summarize(path: str) -> dict:
     instrument: list[str] = []
     in_instrument = False
     spectra = 0
+    chromatograms = 0
     for event, el in ET.iterparse(path, events=("start", "end")):
         tag = _local(el.tag)
         if tag == "instrumentConfigurationList":
@@ -37,12 +38,17 @@ def summarize(path: str) -> dict:
             continue
         if tag == "cvParam" and in_instrument:
             instrument.append(el.get("accession", ""))
+        if tag == "chromatogram":
+            chromatograms += 1
+            el.clear()
+            continue
         if tag != "spectrum":
             continue
         spectra += 1
         level = None
         pol = "none"
         rt = None
+        mode = None
         for p in el.iter():
             if _local(p.tag) != "cvParam":
                 continue
@@ -54,14 +60,18 @@ def summarize(path: str) -> dict:
             elif acc == NEGATIVE:
                 pol = "negative"
             elif acc == CENTROID:
-                centroid += 1
+                mode = "centroid"
             elif acc == PROFILE:
-                profile += 1
+                mode = "profile"
             elif acc == SCAN_START and rt is None:
                 value = float(p.get("value"))
                 rt = value / 60 if p.get("unitName", "minute") == "second" else value
         levels[level or 0] = levels.get(level or 0, 0) + 1
-        polarity[pol] += 1
+        # polarity and centroiding of mass spectra only (UV/DAD spectra have neither MS level nor polarity)
+        if level:
+            polarity[pol] += 1
+            centroid += mode == "centroid"
+            profile += mode == "profile"
         if rt is not None:
             rt_min = rt if rt_min is None else min(rt_min, rt)
             rt_max = rt if rt_max is None else max(rt_max, rt)
@@ -71,6 +81,7 @@ def summarize(path: str) -> dict:
         el.clear()
     return {
         "spectra": spectra,
+        "chromatograms": chromatograms,
         "ms_levels": {str(k): v for k, v in sorted(levels.items())},
         "polarity": polarity,
         "centroid": centroid,
@@ -85,11 +96,17 @@ def summarize(path: str) -> dict:
 def problems(summary: dict) -> tuple[list[str], list[str]]:
     """(errors, warnings) for a summary: errors make the output unusable, warnings need a look."""
     errors, warnings = [], []
+    srm = f" and {summary.get('chromatograms', 0)} chromatograms: SRM/MRM data, not for untargeted analysis" if summary.get("chromatograms") else ""
     if not summary["spectra"]:
-        errors.append("no spectra")
+        errors.append("no spectra" + srm)
         return errors, warnings
     if not summary["ms_levels"].get("1"):
-        errors.append("no MS1 spectra")
+        if summary["ms_levels"].get("2"):
+            errors.append("no MS1 spectra, only MS2: targeted MS/MS data (product ion scans, MRM-HR), not for untargeted analysis")
+        else:
+            errors.append("no MS1 spectra" + srm)
+    if summary["ms_levels"].get("0"):
+        warnings.append(f"{summary['ms_levels']['0']} spectra without MS level (UV/DAD or other detectors)")
     if summary["profile"]:
         warnings.append(f"{summary['profile']} profile spectra (peak pickers such as XCMS centWave expect centroided data)")
     if summary["polarity"]["none"]:

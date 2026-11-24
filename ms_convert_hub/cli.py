@@ -38,6 +38,8 @@ def cmd_convert(a) -> int:
         line = f"{status:7} {r['input']}"
         if r.get("output"):
             line += f" -> {r['output']} ({r.get('engine')}, {r['check']['spectra']} spectra, {r['seconds']} s)"
+        elif r.get("outputs"):
+            line += f" -> {len(r['outputs'])} samples ({r.get('engine')}, {r['seconds']} s)"
         print(line + (f": {detail}" if detail else ""))
         for w in r.get("warnings", []) if r["ok"] and not a.strict else []:
             print(f"        warning: {w}")
